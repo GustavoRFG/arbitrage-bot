@@ -1,0 +1,30 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+*.log
+npm-debug.log*
+
+# Local data (SQLite, raw books, exports)
+data/
+runs/
+exports/
+reports/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Python (legacy, archived)
+_legacy_python/__pycache__/
+_legacy_python/**/__pycache__/
+*.pyc
+
+# Vitest
+coverage/

@@ -1,0 +1,40 @@
+{
+  "name": "arbitrage-bot",
+  "version": "0.1.0",
+  "description": "Market Inefficiency Observatory - Phase 1 (CEX cross-exchange arbitrage + Polymarket repricing lag, READ-ONLY)",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "scan:cex": "tsx src/cli/scan-cex.ts",
+    "scan:poly": "tsx src/cli/scan-polymarket.ts",
+    "scan:all": "tsx src/cli/scan-all.ts",
+    "report:cex": "tsx src/cli/report-cex.ts",
+    "report:poly": "tsx src/cli/report-polymarket.ts",
+    "report:summary": "tsx src/cli/report-summary.ts",
+    "inspect:event": "tsx src/cli/inspect-event.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "ccxt": "^4.4.50",
+    "dotenv": "^16.4.5",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.9.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}
