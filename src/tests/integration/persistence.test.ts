@@ -29,34 +29,73 @@ afterEach(() => {
   try { rmSync(workdir, { recursive: true, force: true }); } catch { /* noop */ }
 });
 
+function scannerRun(runId: string) {
+  return {
+    runId,
+    mode: 'cex' as const,
+    startedAtMs: 1,
+    configHash: 'h',
+    status: 'running' as const,
+    totalCycles: 0,
+    totalSymbolsScanned: 0,
+    totalCandidates: 0,
+    totalMaterialCandidates: 0,
+  };
+}
+
 describe('persistence layer', () => {
   it('creates schema and inserts a scanner run', () => {
     const db = openDbAt(dbPath);
     const runs = new ScannerRunRepository(db);
-    runs.insert({
-      runId: 'r1',
-      mode: 'cex',
-      startedAtMs: 1,
-      configHash: 'abcd',
-      status: 'running',
-    });
+    runs.insert({ ...scannerRun('r1'), configHash: 'abcd' });
     const row = db.prepare('SELECT * FROM scanner_runs WHERE run_id=?').get('r1') as {
       run_id: string;
       status: string;
+      total_cycles: number;
     };
     expect(row.run_id).toBe('r1');
     expect(row.status).toBe('running');
+    expect(row.total_cycles).toBe(0);
+  });
+
+  it('finalizes scanner runs with operational counters and interrupted status', () => {
+    const db = openDbAt(dbPath);
+    const runs = new ScannerRunRepository(db);
+    const run = scannerRun('r1');
+    runs.insert(run);
+
+    runs.finalize({
+      ...run,
+      status: 'interrupted',
+      endedAtMs: 1_501,
+      totalCycles: 3,
+      totalSymbolsScanned: 15,
+      totalCandidates: 4,
+      totalMaterialCandidates: 2,
+      actualElapsedMs: 1_500,
+    });
+
+    const row = db.prepare('SELECT * FROM scanner_runs WHERE run_id=?').get('r1') as {
+      status: string;
+      ended_at: number;
+      total_cycles: number;
+      total_symbols_scanned: number;
+      total_candidates: number;
+      total_material_candidates: number;
+      actual_elapsed_ms: number;
+    };
+    expect(row.status).toBe('interrupted');
+    expect(row.ended_at).toBe(1_501);
+    expect(row.total_cycles).toBe(3);
+    expect(row.total_symbols_scanned).toBe(15);
+    expect(row.total_candidates).toBe(4);
+    expect(row.total_material_candidates).toBe(2);
+    expect(row.actual_elapsed_ms).toBe(1_500);
   });
 
   it('inserts a CEX candidate with two estimates', () => {
     const db = openDbAt(dbPath);
-    new ScannerRunRepository(db).insert({
-      runId: 'r1',
-      mode: 'cex',
-      startedAtMs: 1,
-      configHash: 'h',
-      status: 'running',
-    });
+    new ScannerRunRepository(db).insert(scannerRun('r1'));
     const arb = new ArbitrageRepository(db);
     const id = arb.insertCandidate({
       runId: 'r1',
@@ -103,13 +142,7 @@ describe('persistence layer', () => {
 
   it('arbitrage lifecycle: opens, accumulates max stats, closes when stale', () => {
     const db = openDbAt(dbPath);
-    new ScannerRunRepository(db).insert({
-      runId: 'r1',
-      mode: 'cex',
-      startedAtMs: 1,
-      configHash: 'h',
-      status: 'running',
-    });
+    new ScannerRunRepository(db).insert(scannerRun('r1'));
     const lc = new ArbitrageLifecycleRepository(db);
     const id1 = lc.upsertOpen({
       runId: 'r1',
@@ -159,13 +192,7 @@ describe('persistence layer', () => {
 
   it('order book snapshot insert records top-of-book prices', () => {
     const db = openDbAt(dbPath);
-    new ScannerRunRepository(db).insert({
-      runId: 'r1',
-      mode: 'cex',
-      startedAtMs: 1,
-      configHash: 'h',
-      status: 'running',
-    });
+    new ScannerRunRepository(db).insert(scannerRun('r1'));
     const repo = new OrderBookRepository(db);
     repo.insert({
       runId: 'r1',

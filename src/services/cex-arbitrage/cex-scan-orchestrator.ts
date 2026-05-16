@@ -32,6 +32,7 @@ export class CexScanOrchestrator {
   private stopRequested = false;
 
   async run(opts: CexScanOptions = {}): Promise<ScannerRun> {
+    this.stopRequested = false;
     const cfg = getAppConfig();
     if (!cfg.CEX_ENABLED) {
       log.warn('CEX_ENABLED is false; nothing to do');
@@ -88,8 +89,32 @@ export class CexScanOrchestrator {
     const run = startRun('cex', configHash);
     runs.insert(run);
 
+    let signalReceived = false;
+    let finalized = false;
+    const finalizeRun = (status: Parameters<typeof endRun>[1], notes?: string): void => {
+      if (finalized) return;
+      endRun(run, status, notes);
+      runs.finalize(run);
+      finalized = true;
+    };
+    let wakeStop: (() => void) | undefined;
+    const sleepOrStop = (ms: number): Promise<void> => {
+      if (ms <= 0 || this.stopRequested) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer);
+          if (wakeStop === finish) wakeStop = undefined;
+          resolve();
+        };
+        const timer = setTimeout(finish, ms);
+        wakeStop = finish;
+      });
+    };
     const stop = () => {
+      signalReceived = true;
       this.stopRequested = true;
+      wakeStop?.();
+      finalizeRun('interrupted', 'process interruption signal received');
     };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
@@ -100,11 +125,12 @@ export class CexScanOrchestrator {
     try {
       let iter = 0;
       while (!this.stopRequested) {
-        if (opts.durationMs && systemClock.nowMs() - started >= opts.durationMs) break;
+        if (opts.durationMs !== undefined && systemClock.nowMs() - started >= opts.durationMs) break;
         iter++;
         const loopStart = systemClock.nowMs();
 
         const collected = await collector.collectAll();
+        if (this.stopRequested) break;
 
         // Persist books if asked (default: opportunities-only — handled later).
         const persistAlways = persistMode === 'all';
@@ -190,6 +216,12 @@ export class CexScanOrchestrator {
         }
 
         lifecycleTracker.closeIdleLifecycles();
+        run.totalCycles = iter;
+        run.totalSymbolsScanned += collected.length;
+        run.totalCandidates += cycleCandidates;
+        run.totalMaterialCandidates += cycleMaterial;
+        run.actualElapsedMs = systemClock.nowMs() - run.startedAtMs;
+        if (!finalized) runs.updateProgress(run);
 
         log.info(
           {
@@ -204,16 +236,17 @@ export class CexScanOrchestrator {
 
         const elapsed = systemClock.nowMs() - loopStart;
         const sleep = Math.max(0, cfg.CEX_SCAN_INTERVAL_MS - elapsed);
-        if (sleep > 0) await systemClock.sleep(sleep);
+        if (sleep > 0) await sleepOrStop(sleep);
       }
-      endRun(run, 'completed');
-      runs.finalize(run);
+      finalizeRun(signalReceived ? 'interrupted' : 'completed');
       return run;
     } catch (err) {
       log.error({ err }, 'scan loop crashed');
-      endRun(run, 'failed', (err as Error).message);
-      runs.finalize(run);
+      finalizeRun('failed', (err as Error).message);
       throw err;
+    } finally {
+      process.off('SIGINT', stop);
+      process.off('SIGTERM', stop);
     }
   }
 

@@ -11,8 +11,13 @@ export interface ScannerRun {
   startedAtMs: number;
   endedAtMs?: number;
   configHash: string;
-  status: 'running' | 'completed' | 'aborted' | 'failed';
+  status: 'running' | 'completed' | 'aborted' | 'failed' | 'interrupted';
   notes?: string;
+  totalCycles: number;
+  totalSymbolsScanned: number;
+  totalCandidates: number;
+  totalMaterialCandidates: number;
+  actualElapsedMs?: number;
 }
 
 /** Produce a deterministic short hash of a config object for run audit. */
@@ -34,6 +39,10 @@ export function startRun(mode: ScannerMode, configHash: string): ScannerRun {
     startedAtMs: nowMs(),
     configHash,
     status: 'running',
+    totalCycles: 0,
+    totalSymbolsScanned: 0,
+    totalCandidates: 0,
+    totalMaterialCandidates: 0,
   };
   getLogger('run').info({ runId: run.runId, mode, configHash }, 'scanner run started');
   return run;
@@ -41,11 +50,12 @@ export function startRun(mode: ScannerMode, configHash: string): ScannerRun {
 
 export function endRun(
   run: ScannerRun,
-  status: 'completed' | 'aborted' | 'failed',
+  status: 'completed' | 'aborted' | 'failed' | 'interrupted',
   notes?: string,
 ): ScannerRun {
   run.endedAtMs = nowMs();
   run.status = status;
+  run.actualElapsedMs = run.endedAtMs - run.startedAtMs;
   if (notes !== undefined) run.notes = notes;
   getLogger('run').info(
     { runId: run.runId, status, durationMs: run.endedAtMs - run.startedAtMs },

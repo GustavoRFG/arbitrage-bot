@@ -46,14 +46,20 @@ function applyMigrations(db: BetterDb): void {
     if (applied.has(file)) continue;
     const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf-8');
     log.info({ file }, 'applying migration');
-    const tx = db.transaction(() => {
-      db.exec(sql);
-      db.prepare('INSERT INTO schema_migrations(filename, applied_at) VALUES (?, ?)').run(
-        file,
-        Date.now(),
-      );
-    });
-    tx();
+    const previousForeignKeys = db.pragma('foreign_keys', { simple: true }) as number;
+    db.pragma('foreign_keys = OFF');
+    try {
+      const tx = db.transaction(() => {
+        db.exec(sql);
+        db.prepare('INSERT INTO schema_migrations(filename, applied_at) VALUES (?, ?)').run(
+          file,
+          Date.now(),
+        );
+      });
+      tx();
+    } finally {
+      db.pragma(`foreign_keys = ${previousForeignKeys ? 'ON' : 'OFF'}`);
+    }
   }
 }
 

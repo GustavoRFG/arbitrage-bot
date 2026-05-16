@@ -26,6 +26,17 @@ import type { Database as BetterDb } from 'better-sqlite3';
 export interface CexRunSummary {
   runId: string | null;                          // null = aggregate over all runs
   totalRuns: number;
+  runStatus: string | null;
+  startedAtMs: number | null;
+  endedAtMs: number | null;
+  actualElapsedMs: number;
+  totalCycles: number;
+  totalSymbolsScanned: number;
+  totalCandidates: number;
+  totalMaterialCandidates: number;
+  candidatesPerHour: number;
+  lifecyclesPerHour: number;
+  opportunitiesDetected: number;
   totalSnapshots: number;
 
   rawCandidates: number;                          // unit: candidates
@@ -102,9 +113,11 @@ export class CexReportService {
   summary(runId?: string): CexRunSummary {
     const where = runId ? 'WHERE run_id = ?' : '';
     const args = runId ? [runId] : [];
+    const runWhere = runId ? 'WHERE run_id = ?' : "WHERE mode = 'cex'";
+    const runArgs = runId ? [runId] : [];
 
     const totalRuns =
-      (this.db.prepare(`SELECT COUNT(*) AS n FROM scanner_runs ${where}`).get(...args) as {
+      (this.db.prepare(`SELECT COUNT(*) AS n FROM scanner_runs ${runWhere}`).get(...runArgs) as {
         n: number;
       }).n;
     const totalSnapshots =
@@ -236,10 +249,12 @@ export class CexReportService {
        ${where ? 'AND' : 'WHERE'} duration_ms IS NOT NULL`,
       args,
     );
+    const runOps = this.runOperationalSummary(runId, rawCandidates, distinctLifecycles);
 
     return {
       runId: runId ?? null,
       totalRuns,
+      ...runOps,
       totalSnapshots,
       rawCandidates,
       candidatesNetPositiveAfterFees: candNet,
@@ -464,6 +479,108 @@ export class CexReportService {
       netSpreadPct: row.netSpreadPct,
       supportedByDepth: row.supportedByDepth === 1,
       tradablePrefunded: row.tradablePrefunded === 1,
+    };
+  }
+
+  private runOperationalSummary(
+    runId: string | undefined,
+    rawCandidates: number,
+    distinctLifecycles: number,
+  ): Pick<
+    CexRunSummary,
+    | 'runStatus'
+    | 'startedAtMs'
+    | 'endedAtMs'
+    | 'actualElapsedMs'
+    | 'totalCycles'
+    | 'totalSymbolsScanned'
+    | 'totalCandidates'
+    | 'totalMaterialCandidates'
+    | 'candidatesPerHour'
+    | 'lifecyclesPerHour'
+    | 'opportunitiesDetected'
+  > {
+    const now = Date.now();
+    const elapsedExpr = `COALESCE(
+      actual_elapsed_ms,
+      CASE
+        WHEN ended_at IS NOT NULL THEN ended_at - started_at
+        ELSE ? - started_at
+      END
+    )`;
+
+    const row = runId
+      ? (this.db
+          .prepare(
+            `SELECT status AS runStatus,
+                    started_at AS startedAtMs,
+                    ended_at AS endedAtMs,
+                    ${elapsedExpr} AS actualElapsedMs,
+                    total_cycles AS totalCycles,
+                    total_symbols_scanned AS totalSymbolsScanned,
+                    total_candidates AS totalCandidates,
+                    total_material_candidates AS totalMaterialCandidates
+             FROM scanner_runs
+             WHERE run_id = ?`,
+          )
+          .get(now, runId) as
+          | {
+              runStatus: string;
+              startedAtMs: number;
+              endedAtMs: number | null;
+              actualElapsedMs: number | null;
+              totalCycles: number;
+              totalSymbolsScanned: number;
+              totalCandidates: number;
+              totalMaterialCandidates: number;
+            }
+          | undefined)
+      : (this.db
+          .prepare(
+            `SELECT CASE
+                      WHEN COUNT(*) = 0 THEN NULL
+                      WHEN COUNT(DISTINCT status) = 1 THEN MIN(status)
+                      ELSE 'mixed'
+                    END AS runStatus,
+                    MIN(started_at) AS startedAtMs,
+                    CASE
+                      WHEN SUM(CASE WHEN ended_at IS NULL THEN 1 ELSE 0 END) > 0 THEN NULL
+                      ELSE MAX(ended_at)
+                    END AS endedAtMs,
+                    COALESCE(SUM(${elapsedExpr}), 0) AS actualElapsedMs,
+                    COALESCE(SUM(total_cycles), 0) AS totalCycles,
+                    COALESCE(SUM(total_symbols_scanned), 0) AS totalSymbolsScanned,
+                    COALESCE(SUM(total_candidates), 0) AS totalCandidates,
+                    COALESCE(SUM(total_material_candidates), 0) AS totalMaterialCandidates
+             FROM scanner_runs
+             WHERE mode = 'cex'`,
+          )
+          .get(now) as {
+          runStatus: string | null;
+          startedAtMs: number | null;
+          endedAtMs: number | null;
+          actualElapsedMs: number;
+          totalCycles: number;
+          totalSymbolsScanned: number;
+          totalCandidates: number;
+          totalMaterialCandidates: number;
+        });
+
+    const actualElapsedMs = Math.max(0, row?.actualElapsedMs ?? 0);
+    const hours = actualElapsedMs > 0 ? actualElapsedMs / 3_600_000 : 0;
+
+    return {
+      runStatus: row?.runStatus ?? null,
+      startedAtMs: row?.startedAtMs ?? null,
+      endedAtMs: row?.endedAtMs ?? null,
+      actualElapsedMs,
+      totalCycles: row?.totalCycles ?? 0,
+      totalSymbolsScanned: row?.totalSymbolsScanned ?? 0,
+      totalCandidates: row?.totalCandidates ?? 0,
+      totalMaterialCandidates: row?.totalMaterialCandidates ?? 0,
+      candidatesPerHour: hours > 0 ? rawCandidates / hours : 0,
+      lifecyclesPerHour: hours > 0 ? distinctLifecycles / hours : 0,
+      opportunitiesDetected: distinctLifecycles,
     };
   }
 

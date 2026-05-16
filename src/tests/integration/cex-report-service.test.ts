@@ -27,16 +27,26 @@ afterEach(() => {
   }
 });
 
+function scannerRun(runId: string) {
+  return {
+    runId,
+    mode: 'cex' as const,
+    startedAtMs: 1,
+    endedAtMs: 3_600_001,
+    configHash: 'h',
+    status: 'completed' as const,
+    totalCycles: 6,
+    totalSymbolsScanned: 30,
+    totalCandidates: 3,
+    totalMaterialCandidates: 1,
+    actualElapsedMs: 3_600_000,
+  };
+}
+
 describe('CexReportService', () => {
   it('summarizes single vs multi-observation lifecycles and audits best attached estimates', () => {
     const db = openDbAt(dbPath);
-    new ScannerRunRepository(db).insert({
-      runId: 'r1',
-      mode: 'cex',
-      startedAtMs: 1,
-      configHash: 'h',
-      status: 'running',
-    });
+    new ScannerRunRepository(db).insert(scannerRun('r1'));
 
     const lifecycles = new ArbitrageLifecycleRepository(db);
     const arbitrage = new ArbitrageRepository(db);
@@ -167,6 +177,14 @@ describe('CexReportService', () => {
     expect(summary.distinctOpportunityLifecycles).toBe(2);
     expect(summary.singleObservationLifecycles).toBe(1);
     expect(summary.multiObservationLifecycles).toBe(1);
+    expect(summary.actualElapsedMs).toBe(3_600_000);
+    expect(summary.totalCycles).toBe(6);
+    expect(summary.totalSymbolsScanned).toBe(30);
+    expect(summary.totalCandidates).toBe(3);
+    expect(summary.totalMaterialCandidates).toBe(1);
+    expect(summary.candidatesPerHour).toBe(3);
+    expect(summary.lifecyclesPerHour).toBe(2);
+    expect(summary.opportunitiesDetected).toBe(2);
 
     const top = report.topLifecycles(10, 'r1');
     const first = top[0];
@@ -189,5 +207,24 @@ describe('CexReportService', () => {
       supportedByDepth: true,
       tradablePrefunded: true,
     });
+  });
+
+  it('reports operational context for zero-candidate runs', () => {
+    const db = openDbAt(dbPath);
+    new ScannerRunRepository(db).insert({
+      ...scannerRun('r-zero'),
+      totalCandidates: 0,
+      totalMaterialCandidates: 0,
+    });
+
+    const summary = new CexReportService(db).summary('r-zero');
+
+    expect(summary.rawCandidates).toBe(0);
+    expect(summary.distinctOpportunityLifecycles).toBe(0);
+    expect(summary.opportunitiesDetected).toBe(0);
+    expect(summary.actualElapsedMs).toBe(3_600_000);
+    expect(summary.totalCycles).toBe(6);
+    expect(summary.candidatesPerHour).toBe(0);
+    expect(summary.lifecyclesPerHour).toBe(0);
   });
 });

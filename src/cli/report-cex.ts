@@ -21,6 +21,11 @@ function fmtTs(ms: number | null): string {
   return new Date(ms).toISOString();
 }
 
+function fmtOptionalTs(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) return 'n/a';
+  return new Date(ms).toISOString();
+}
+
 function fmtRatio(numerator: number, denominator: number): string {
   return `${numerator} / ${denominator}`;
 }
@@ -38,6 +43,17 @@ async function main(): Promise<void> {
   lines.push('-----------------------------------');
   lines.push(`Scope: ${runId ? `run ${runId}` : 'all runs'}`);
   lines.push(`Runs:                                              ${sum.totalRuns}`);
+  lines.push(`Run status:                                        ${sum.runStatus ?? 'n/a'}`);
+  lines.push(`Started at:                                        ${fmtOptionalTs(sum.startedAtMs)}`);
+  lines.push(`Ended at:                                          ${fmtTs(sum.endedAtMs)}`);
+  lines.push(`Duration (ms):                                     ${sum.actualElapsedMs}`);
+  lines.push(`Total cycles:                                      ${sum.totalCycles}`);
+  lines.push(`Total symbols scanned:                             ${sum.totalSymbolsScanned}`);
+  lines.push(`Total candidates (run counter):                    ${sum.totalCandidates}`);
+  lines.push(`Total material candidates:                         ${sum.totalMaterialCandidates}`);
+  lines.push(`Candidates/hour:                                   ${fmtNum(sum.candidatesPerHour)}`);
+  lines.push(`Lifecycles/hour:                                   ${fmtNum(sum.lifecyclesPerHour)}`);
+  lines.push(`Opportunities detected:                            ${sum.opportunitiesDetected}`);
   lines.push(`Order book snapshots persisted:                    ${sum.totalSnapshots}`);
   lines.push('');
   lines.push('Counting layers (distinct units — do not sum across rows):');
@@ -89,6 +105,9 @@ async function main(): Promise<void> {
 
   lines.push('');
   lines.push('Per symbol (candidates / depth-estimates / tradable-estimates / lifecycles):');
+  if (symbols.length === 0) {
+    lines.push('  (none)');
+  }
   for (const r of symbols.slice(0, 20)) {
     lines.push(
       `  ${r.symbol.padEnd(12)} candidates=${String(r.rawCandidates).padStart(6)}` +
@@ -100,6 +119,9 @@ async function main(): Promise<void> {
 
   lines.push('');
   lines.push('Per route, buy -> sell (candidates / depth-estimates / tradable-estimates / lifecycles):');
+  if (routes.length === 0) {
+    lines.push('  (none)');
+  }
   for (const r of routes.slice(0, 20)) {
     lines.push(
       `  ${r.buyExchange.padEnd(8)} -> ${r.sellExchange.padEnd(8)}` +
@@ -112,6 +134,9 @@ async function main(): Promise<void> {
 
   lines.push('');
   lines.push('Top 10 lifecycle audit (longest first):');
+  if (lifecycles.length === 0) {
+    lines.push('  (none)');
+  }
   for (const l of lifecycles) {
     const bestEstimate = l.bestEstimate
       ? `bestEstimate=estimate#${l.bestEstimate.estimateId} candidate#${l.bestEstimate.candidateId}` +
