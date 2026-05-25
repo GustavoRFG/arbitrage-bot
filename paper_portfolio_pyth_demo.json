@@ -1,0 +1,8 @@
+{
+  "bitget":  { "USDT": 50000 },
+  "kucoin":  { "USDT": 50000 },
+  "binance": { "USDT": 50000 },
+  "gateio":  { "USDT": 50000 },
+  "htx":     { "USDT": 50000 },
+  "mexc":    { "PYTH": 10000000 }
+}

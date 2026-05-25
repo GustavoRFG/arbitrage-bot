@@ -5,6 +5,7 @@ import {
   hashConfig,
   startRun,
   type ScannerRun,
+  type ScannerRunUniverse,
 } from '../../core/run-context/scanner-run.js';
 import { systemClock } from '../../core/time/clock.js';
 import { CcxtExchangeAdapter } from '../../adapters/exchanges/ccxt-exchange-adapter.js';
@@ -17,7 +18,9 @@ import { getDb } from '../../persistence/db.js';
 import { ArbitrageDetector } from './arbitrage-detector.js';
 import { ArbitrageLifecycleTracker } from './arbitrage-lifecycle-tracker.js';
 import { FeeResolver } from './fee-resolver.js';
+import { buildMaterialRule } from './material-rule.js';
 import { OrderBookCollector } from './order-book-collector.js';
+import { resolveSymbolUniverse } from './symbol-universe-resolver.js';
 
 import type { BaseExchangeAdapter } from '../../adapters/exchanges/base-exchange-adapter.js';
 import type { CexSymbol } from '../../core/types/market.js';
@@ -51,11 +54,82 @@ export class CexScanOrchestrator {
     const fees = new FeeResolver();
 
     const adapters = this.buildAdapters(cfg.CEX_EXCHANGES);
+    if (adapters.length === 0) {
+      log.error({ requested: cfg.CEX_EXCHANGES }, 'no usable exchange adapters; aborting');
+      return endRun(
+        startRun('cex', hashConfig({ note: 'no-adapters' })),
+        'aborted',
+        'no usable exchange adapters',
+      );
+    }
     const supported = await this.loadSupportedSymbols(adapters);
+
+    const universe = resolveSymbolUniverse({
+      mode: cfg.CEX_SYMBOL_MODE,
+      configuredSymbols: cfg.CEX_SYMBOLS as CexSymbol[],
+      supportedSymbolsByVenue: supported,
+      minVenuesPerSymbol: cfg.CEX_MIN_VENUES_PER_SYMBOL,
+      maxSymbols: cfg.CEX_MAX_SYMBOLS,
+    });
+
+    if (universe.symbols.length === 0) {
+      log.error(
+        { mode: cfg.CEX_SYMBOL_MODE, exchanges: adapters.map((a) => a.id) },
+        'symbol resolution yielded zero symbols; aborting',
+      );
+      return endRun(
+        startRun('cex', hashConfig({ note: 'no-symbols' })),
+        'aborted',
+        'symbol universe is empty after resolution',
+      );
+    }
+
+    const materialRule = buildMaterialRule({
+      minNetProfitQuote: cfg.CEX_MIN_NET_PROFIT_QUOTE,
+      minExecutableNetSpreadPct: cfg.CEX_MIN_EXECUTABLE_NET_SPREAD_PCT,
+    });
+
+    const runUniverse: ScannerRunUniverse = {
+      symbolMode: universe.mode,
+      enabledExchanges: adapters.map((a) => a.id),
+      resolvedSymbols: universe.symbols,
+      minVenuesPerSymbol: cfg.CEX_MIN_VENUES_PER_SYMBOL,
+      maxSymbols: cfg.CEX_MAX_SYMBOLS,
+      truncated: universe.truncated,
+      materialRule,
+    };
+
+    // Predicted per-cycle work: every (venue × symbol) pair is one REST call.
+    // The estimate is intentionally conservative because parallelism per-symbol
+    // means actual elapsed is usually lower; the warning is a sanity gate.
+    const requestsPerCycle = universe.symbols.length * adapters.length;
+    const predictedMs = requestsPerCycle * cfg.CEX_EXPECTED_MS_PER_REQUEST / Math.max(1, adapters.length);
+    if (predictedMs > cfg.CEX_SLOW_CYCLE_WARN_MS) {
+      log.warn(
+        {
+          requestsPerCycle,
+          predictedMs: Math.round(predictedMs),
+          warnBudgetMs: cfg.CEX_SLOW_CYCLE_WARN_MS,
+          scanIntervalMs: cfg.CEX_SCAN_INTERVAL_MS,
+        },
+        'predicted cycle work exceeds CEX_SLOW_CYCLE_WARN_MS — consider shrinking the universe or moving to WebSocket adapters',
+      );
+    }
+
+    this.logStartupBanner({
+      adapters,
+      universe: runUniverse,
+      cfg: {
+        scanIntervalMs: cfg.CEX_SCAN_INTERVAL_MS,
+        targetNotionals: cfg.CEX_TARGET_NOTIONALS,
+        depthLevels: cfg.CEX_ORDER_BOOK_DEPTH_LEVELS,
+        persistMode: cfg.CEX_PERSIST_BOOK_SNAPSHOTS,
+      },
+    });
 
     const collector = new OrderBookCollector(
       adapters,
-      cfg.CEX_SYMBOLS as CexSymbol[],
+      universe.symbols,
       cfg.CEX_ORDER_BOOK_DEPTH_LEVELS,
       supported,
     );
@@ -73,8 +147,9 @@ export class CexScanOrchestrator {
     );
 
     const configHash = hashConfig({
-      exchanges: cfg.CEX_EXCHANGES,
-      symbols: cfg.CEX_SYMBOLS,
+      exchanges: runUniverse.enabledExchanges,
+      symbolMode: cfg.CEX_SYMBOL_MODE,
+      symbols: universe.symbols,
       depth: cfg.CEX_ORDER_BOOK_DEPTH_LEVELS,
       notionals: cfg.CEX_TARGET_NOTIONALS,
       thresholds: {
@@ -87,6 +162,7 @@ export class CexScanOrchestrator {
       },
     });
     const run = startRun('cex', configHash);
+    run.universeJson = JSON.stringify(runUniverse);
     runs.insert(run);
 
     let signalReceived = false;
@@ -211,6 +287,11 @@ export class CexScanOrchestrator {
                 tradablePrefunded: est.tradablePrefunded,
               });
             }
+            // isMaterial is the predicate defined in material-rule.ts and
+            // evaluated inside ArbitrageDetector.detect(): a candidate is
+            // material when at least one of its depth estimates fills both
+            // legs at the target notional AND meets the configured netProfit
+            // + executableNetSpread floors.
             if (candidate.isMaterial) cycleMaterial++;
           }
         }
@@ -223,19 +304,25 @@ export class CexScanOrchestrator {
         run.actualElapsedMs = systemClock.nowMs() - run.startedAtMs;
         if (!finalized) runs.updateProgress(run);
 
+        const elapsedMs = systemClock.nowMs() - loopStart;
         log.info(
           {
             iter,
             symbols: collected.length,
             candidates: cycleCandidates,
             material: cycleMaterial,
-            elapsedMs: systemClock.nowMs() - loopStart,
+            elapsedMs,
           },
           'scan cycle complete',
         );
+        if (elapsedMs > cfg.CEX_SLOW_CYCLE_WARN_MS) {
+          log.warn(
+            { iter, elapsedMs, warnBudgetMs: cfg.CEX_SLOW_CYCLE_WARN_MS },
+            'cycle elapsedMs exceeded the configured warning budget',
+          );
+        }
 
-        const elapsed = systemClock.nowMs() - loopStart;
-        const sleep = Math.max(0, cfg.CEX_SCAN_INTERVAL_MS - elapsed);
+        const sleep = Math.max(0, cfg.CEX_SCAN_INTERVAL_MS - elapsedMs);
         if (sleep > 0) await sleepOrStop(sleep);
       }
       finalizeRun(signalReceived ? 'interrupted' : 'completed');
@@ -276,19 +363,58 @@ export class CexScanOrchestrator {
     }
     return out;
   }
+
+  private logStartupBanner(args: {
+    adapters: BaseExchangeAdapter[];
+    universe: ScannerRunUniverse;
+    cfg: {
+      scanIntervalMs: number;
+      targetNotionals: number[];
+      depthLevels: number;
+      persistMode: string;
+    };
+  }): void {
+    const symbols = args.universe.resolvedSymbols;
+    const preview =
+      symbols.length <= 20
+        ? symbols.join(', ')
+        : symbols.slice(0, 20).join(', ') + `, … (+${symbols.length - 20} more)`;
+    log.info(
+      {
+        exchanges: args.adapters.map((a) => `${a.id}(${a.name})`),
+        symbolMode: args.universe.symbolMode,
+        symbolsCount: symbols.length,
+        symbolsPreview: preview,
+        minVenuesPerSymbol: args.universe.minVenuesPerSymbol,
+        maxSymbols: args.universe.maxSymbols,
+        truncated: args.universe.truncated,
+        materialRule: args.universe.materialRule.description,
+        scanIntervalMs: args.cfg.scanIntervalMs,
+        targetNotionals: args.cfg.targetNotionals,
+        depthLevels: args.cfg.depthLevels,
+        persistMode: args.cfg.persistMode,
+      },
+      'CEX scan startup — resolved universe & material rule',
+    );
+  }
 }
 
 function displayName(id: string): string {
   switch (id) {
-    case 'binance':
-      return 'Binance';
-    case 'gateio':
-      return 'Gate.io';
-    case 'kucoin':
-      return 'KuCoin';
-    case 'mexc':
-      return 'MEXC';
-    default:
-      return id;
+    case 'binance':   return 'Binance';
+    case 'gateio':    return 'Gate.io';
+    case 'kucoin':    return 'KuCoin';
+    case 'mexc':      return 'MEXC';
+    case 'coinex':    return 'CoinEx';
+    case 'coinbase':  return 'Coinbase';
+    case 'bitget':    return 'Bitget';
+    case 'bitfinex':  return 'Bitfinex';
+    case 'htx':       return 'HTX';
+    case 'okx':       return 'OKX';
+    case 'bybit':     return 'Bybit';
+    case 'kraken':    return 'Kraken';
+    case 'bingx':     return 'BingX';
+    case 'cryptocom': return 'Crypto.com';
+    default:          return id;
   }
 }

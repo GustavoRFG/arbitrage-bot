@@ -87,6 +87,21 @@ export interface CexLifecycleBestEstimate {
   tradablePrefunded: boolean;
 }
 
+export interface CexRunUniverseRow {
+  runId: string;
+  symbolMode: string;
+  enabledExchanges: string[];
+  resolvedSymbols: string[];
+  minVenuesPerSymbol: number;
+  maxSymbols: number;
+  truncated: boolean;
+  materialRule: {
+    minNetProfitQuote: number;
+    minExecutableNetSpreadPct: number;
+    description: string;
+  };
+}
+
 export interface CexLifecycleAuditRow {
   id: number;
   eventKey: string;
@@ -404,6 +419,48 @@ export class CexReportService {
     for (const r of lcRows) get(r.buyExchange, r.sellExchange).lifecycles = r.n;
 
     return Array.from(merged.values()).sort((a, b) => b.rawCandidates - a.rawCandidates);
+  }
+
+  /**
+   * Recover the symbol/exchange universe and material-candidate rule that
+   * were active during one or more runs. Returns the most recent universe
+   * when called without `runId` so global reports have something to show.
+   *
+   * The `materialRule` field is the same predicate the orchestrator
+   * evaluated at scan time (see material-rule.ts) — surface it in reports
+   * so readers can interpret `totalMaterialCandidates` without re-reading
+   * the live config.
+   */
+  universes(runId?: string): CexRunUniverseRow[] {
+    const where = runId ? 'WHERE run_id = ?' : "WHERE mode = 'cex' AND universe_json IS NOT NULL";
+    const args = runId ? [runId] : [];
+    const rows = this.db
+      .prepare(
+        `SELECT run_id AS runId, universe_json AS universeJson
+         FROM scanner_runs ${where}
+         ORDER BY started_at DESC
+         LIMIT ?`,
+      )
+      .all(...args, runId ? 1 : 5) as { runId: string; universeJson: string | null }[];
+    const out: CexRunUniverseRow[] = [];
+    for (const r of rows) {
+      if (!r.universeJson) continue;
+      try {
+        const parsed = JSON.parse(r.universeJson) as {
+          symbolMode: string;
+          enabledExchanges: string[];
+          resolvedSymbols: string[];
+          minVenuesPerSymbol: number;
+          maxSymbols: number;
+          truncated: boolean;
+          materialRule: CexRunUniverseRow['materialRule'];
+        };
+        out.push({ runId: r.runId, ...parsed });
+      } catch {
+        // Older runs may carry malformed JSON; skip silently.
+      }
+    }
+    return out;
   }
 
   topLifecycles(limit = 10, runId?: string): CexLifecycleAuditRow[] {

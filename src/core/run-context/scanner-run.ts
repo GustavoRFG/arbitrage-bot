@@ -18,6 +18,24 @@ export interface ScannerRun {
   totalCandidates: number;
   totalMaterialCandidates: number;
   actualElapsedMs?: number;
+  /** JSON-serialised universe + material rule descriptor (see ScannerRunUniverse). */
+  universeJson?: string;
+}
+
+/** Auxiliary metadata captured at startup so reports can recover the scan
+ * universe and rule without re-reading the config that was active back then. */
+export interface ScannerRunUniverse {
+  symbolMode: 'fixed' | 'curated' | 'intersection';
+  enabledExchanges: string[];
+  resolvedSymbols: string[];
+  minVenuesPerSymbol: number;
+  maxSymbols: number;
+  truncated: boolean;
+  materialRule: {
+    minNetProfitQuote: number;
+    minExecutableNetSpreadPct: number;
+    description: string;
+  };
 }
 
 /** Produce a deterministic short hash of a config object for run audit. */

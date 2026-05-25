@@ -11,8 +11,8 @@ export class ScannerRunRepository {
         `INSERT INTO scanner_runs(
            run_id, mode, started_at, ended_at, config_hash, status, notes,
            total_cycles, total_symbols_scanned, total_candidates,
-           total_material_candidates, actual_elapsed_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           total_material_candidates, actual_elapsed_ms, universe_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         run.runId,
@@ -27,6 +27,7 @@ export class ScannerRunRepository {
         run.totalCandidates,
         run.totalMaterialCandidates,
         run.actualElapsedMs ?? null,
+        run.universeJson ?? null,
       );
   }
 
@@ -62,7 +63,8 @@ export class ScannerRunRepository {
              total_symbols_scanned = ?,
              total_candidates = ?,
              total_material_candidates = ?,
-             actual_elapsed_ms = ?
+             actual_elapsed_ms = ?,
+             universe_json = COALESCE(?, universe_json)
          WHERE run_id = ?`,
       )
       .run(
@@ -74,6 +76,7 @@ export class ScannerRunRepository {
         run.totalCandidates,
         run.totalMaterialCandidates,
         run.actualElapsedMs ?? null,
+        run.universeJson ?? null,
         run.runId,
       );
   }

@@ -37,6 +37,7 @@ async function main(): Promise<void> {
   const symbols = reports.bySymbol(runId);
   const routes = reports.byRoute(runId);
   const lifecycles = reports.topLifecycles(10, runId);
+  const universes = reports.universes(runId);
 
   const lines: string[] = [];
   lines.push('CEX ARBITRAGE OBSERVATORY — REPORT');
@@ -102,6 +103,31 @@ async function main(): Promise<void> {
       sum.topSymbol ? `${sum.topSymbol.symbol} (${sum.topSymbol.count})` : '—'
     }`,
   );
+
+  lines.push('');
+  lines.push('Run universe & material-candidate rule:');
+  if (universes.length === 0) {
+    lines.push('  (no universe metadata stored — older run or pre-migration scan)');
+  } else {
+    for (const u of universes) {
+      const preview =
+        u.resolvedSymbols.length <= 12
+          ? u.resolvedSymbols.join(', ')
+          : u.resolvedSymbols.slice(0, 12).join(', ') +
+            `, … (+${u.resolvedSymbols.length - 12} more)`;
+      lines.push(`  run=${u.runId}`);
+      lines.push(`    symbolMode=${u.symbolMode}  resolvedSymbols=${u.resolvedSymbols.length}` +
+        `  minVenuesPerSymbol=${u.minVenuesPerSymbol}  maxSymbols=${u.maxSymbols}` +
+        `  truncated=${u.truncated}`);
+      lines.push(`    enabledExchanges=[${u.enabledExchanges.join(', ')}]`);
+      lines.push(`    symbols=[${preview}]`);
+      lines.push(`    materialRule: ${u.materialRule.description}`);
+      lines.push(
+        `      thresholds: minNetProfitQuote=${u.materialRule.minNetProfitQuote}` +
+          `  minExecutableNetSpreadPct=${u.materialRule.minExecutableNetSpreadPct}%`,
+      );
+    }
+  }
 
   lines.push('');
   lines.push('Per symbol (candidates / depth-estimates / tradable-estimates / lifecycles):');

@@ -17,6 +17,12 @@
     "report:poly": "tsx src/cli/report-polymarket.ts",
     "report:summary": "tsx src/cli/report-summary.ts",
     "inspect:event": "tsx src/cli/inspect-event.ts",
+    "paper:cex": "tsx src/cli/paper-cex.ts",
+    "paper:cex:compare": "tsx src/cli/paper-cex-compare.ts",
+    "dashboard:dev": "npm --prefix dashboard run dev",
+    "dashboard:build": "npm --prefix dashboard run build",
+    "dashboard:start": "npm --prefix dashboard run start",
+    "dashboard:typecheck": "npm --prefix dashboard run typecheck",
     "test": "vitest run",
     "test:watch": "vitest"
   },
