@@ -10,7 +10,9 @@ import {
   getCandidatesOverTime,
 } from '@/lib/queries/observatory';
 import { listSimulationFamilies } from '@/lib/queries/simulator';
+import { getLatestComparisonRun } from '@/lib/queries/comparison';
 import { detectDominantRegime } from '@/lib/regime';
+import { RegimeComparisonCards } from '@/components/overview/RegimeComparisonCards';
 import { fmtDuration, fmtInt, fmtPct, fmtTime, fmtUSDT, fmtUSDTSigned, pnlClass } from '@/lib/format';
 
 import { RunSelector } from '@/components/nav/RunSelector';
@@ -60,6 +62,13 @@ export default async function OverviewPage({ searchParams }: { searchParams: Sea
   const timeline = getCandidatesOverTime(runId, 60);
   const families = listSimulationFamilies(runId);
   const regime = detectDominantRegime(symbols, routes);
+  const latestComparison = getLatestComparisonRun(runId);
+
+  // Top actionable symbol = symbol with at least one tradable+prefunded estimate
+  // and a positive max executable net profit.
+  const actionableSymbol = symbols
+    .filter((s) => s.tradableEstimates > 0 && s.maxNetProfitQuote > 0)
+    .sort((a, b) => b.maxNetProfitQuote - a.maxNetProfitQuote)[0];
 
   const effectiveElapsedMs =
     run.actualElapsedMs ??
@@ -99,6 +108,25 @@ export default async function OverviewPage({ searchParams }: { searchParams: Sea
       </div>
 
       <RegimeCallout regime={regime} />
+
+      <RegimeComparisonCards
+        scannerRunId={runId}
+        rawRegime={{
+          topSymbol: regime?.topSymbol ?? symbols[0]?.symbol ?? null,
+          sellSink: regime?.sellSink ?? null,
+          sourceVenues: regime?.sourceVenues ?? [],
+          description: regime?.description ?? null,
+        }}
+        actionable={{
+          topSymbol: actionableSymbol?.symbol ?? null,
+          tradableRatio,
+          medianPositiveEstimate: headline.medianNetProfitQuote,
+          maxPositiveEstimate: headline.maxNetProfitQuote,
+          prefundedTradableCount: funnel.estimatesTradablePrefunded,
+          estimatesCalculated: funnel.estimatesCalculated,
+        }}
+        comparison={latestComparison}
+      />
 
       <section>
         <SectionHeader

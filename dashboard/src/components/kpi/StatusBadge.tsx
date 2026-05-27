@@ -1,9 +1,26 @@
 import clsx from 'clsx';
 
-type Status = 'running' | 'completed' | 'interrupted' | 'aborted' | 'failed' | 'unknown';
+type Status =
+  | 'running'
+  | 'active'
+  | 'completed'
+  | 'interrupted'
+  | 'aborted'
+  | 'failed'
+  | 'stale_running'
+  | 'empty_or_legacy'
+  | 'unknown';
 
 const TONE: Record<Status, { dot: string; label: string; pill: string }> = {
   running: {
+    dot: 'dot-running',
+    pill: 'border-signal-positive/30 bg-signal-positive/10 text-signal-positive',
+    label: 'RUNNING',
+  },
+  // Phase 2.6.1 — visual-only "active" is the dashboard-classified equivalent
+  // of `running` for a run within the stale threshold. We keep the same
+  // signal-positive tone so the user reads it as a healthy live scan.
+  active: {
     dot: 'dot-running',
     pill: 'border-signal-positive/30 bg-signal-positive/10 text-signal-positive',
     label: 'RUNNING',
@@ -28,6 +45,19 @@ const TONE: Record<Status, { dot: string; label: string; pill: string }> = {
     pill: 'border-signal-negative/30 bg-signal-negative/10 text-signal-negative',
     label: 'FAILED',
   },
+  // Phase 2.6.1 — early-development rows that were never finalized cleanly:
+  // status='running' in DB but no recent activity. Rendered as a muted
+  // warning so they don't pretend to be alive.
+  stale_running: {
+    dot: 'bg-accent-amber/70',
+    pill: 'border-accent-amber/30 bg-accent-amber/5 text-accent-amber/80',
+    label: 'STALE',
+  },
+  empty_or_legacy: {
+    dot: 'bg-text-faint',
+    pill: 'border-border-subtle bg-bg-elevated text-text-faint',
+    label: 'LEGACY EMPTY',
+  },
   unknown: {
     dot: 'bg-text-faint',
     pill: 'border-border-subtle bg-bg-elevated text-text-faint',
@@ -37,7 +67,7 @@ const TONE: Record<Status, { dot: string; label: string; pill: string }> = {
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   const tone = TONE[(status as Status) in TONE ? (status as Status) : 'unknown']!;
-  const isRunning = status === 'running';
+  const isRunning = status === 'running' || status === 'active';
   return (
     <span
       className={clsx(

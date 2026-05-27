@@ -7,6 +7,10 @@ import { getLogger } from '../core/logger/logger.js';
 import { newRunId } from '../core/run-context/scanner-run.js';
 import { nowMs } from '../core/types/timestamps.js';
 import { getDb } from '../persistence/db.js';
+import {
+  PaperComparisonRepository,
+  newComparisonRunId,
+} from '../persistence/repositories/paper-comparison-repository.js';
 import { FeeResolver } from '../services/cex-arbitrage/fee-resolver.js';
 import {
   CandidateReplayLoader,
@@ -47,6 +51,9 @@ interface CliArgs {
   routes?: Array<[string, string]>;
   reentryCooldownMs?: number;
   contentionMode?: ContentionMode;
+  persist?: boolean;
+  label?: string;
+  dashboardBaseUrl?: string;
   help: boolean;
 }
 
@@ -110,6 +117,14 @@ function parseArgs(argv: string[]): CliArgs {
         throw new Error(`Unknown --contention ${mode} (supported: single_route, multi_route)`);
       }
       out.contentionMode = mode;
+    } else if (raw === '--persist') {
+      out.persist = true;
+    } else if (raw === '--no-persist' || raw === '--dry-report-only') {
+      out.persist = false;
+    } else if (raw.startsWith('--label=')) {
+      out.label = raw.slice('--label='.length).trim();
+    } else if (raw.startsWith('--dashboard-url=')) {
+      out.dashboardBaseUrl = raw.slice('--dashboard-url='.length).trim();
     }
   }
   return out;
@@ -140,6 +155,11 @@ function printHelp(): void {
       '  --symbols=PYTH/USDT,...     filter lifecycles by symbol',
       '  --routes=bitget:mexc,...    filter lifecycles by buy:sell venue',
       '  --reentry-cooldown=60000    cooldown (ms) for cooldown_reentry',
+      '  --persist                   persist comparison to SQLite for dashboard (default)',
+      '  --no-persist                print report only, no DB write',
+      '  --dry-report-only           alias for --no-persist',
+      '  --label="..."               human-readable label stored alongside the comparison',
+      '  --dashboard-url=http://...  base URL printed in the persistence success message',
       '  --help                      print this help',
     ].join('\n'),
   );
@@ -248,6 +268,39 @@ async function main(): Promise<void> {
 
   // eslint-disable-next-line no-console
   console.log(new ComparisonReportService().format(report));
+
+  const shouldPersist = args.persist !== false; // default true
+  if (shouldPersist) {
+    const comparisonRunId = newComparisonRunId('cex_paper_cmp', nowMs());
+    const repo = new PaperComparisonRepository(db);
+    const persistResult = repo.persist({
+      comparisonRunId,
+      createdAtMs: nowMs(),
+      report,
+      ...(args.label ? { label: args.label } : {}),
+      ...(args.symbols && args.symbols.length > 0 ? { symbolsFilter: args.symbols } : {}),
+      ...(args.routes && args.routes.length > 0 ? { routesFilter: args.routes } : {}),
+      eligibleLifecycles: lifecycles.length,
+    });
+    const dashboardBaseUrl = args.dashboardBaseUrl ?? 'http://localhost:3737';
+    // eslint-disable-next-line no-console
+    console.log(
+      [
+        '',
+        `Comparison run persisted: ${persistResult.comparisonRunId}`,
+        `  scenarios:                ${persistResult.scenarioCount}`,
+        `  best preset / latency:    ${persistResult.bestPresetName ?? '-'} / ${persistResult.bestLatencyMs ?? '-'}ms`,
+        `  best total PnL (quote):   ${persistResult.bestTotalNetProfitQuote?.toFixed(4) ?? '-'}`,
+        `  total missed PnL (quote): ${persistResult.totalMissedProfitQuote.toFixed(4)}`,
+        `  top bottleneck:           ${persistResult.topBottleneckReason ?? '-'}`,
+        '',
+        `Open dashboard: ${dashboardBaseUrl}/compare?run=${args.runId}&comparison=${persistResult.comparisonRunId}`,
+      ].join('\n'),
+    );
+  } else {
+    // eslint-disable-next-line no-console
+    console.log('\n(--no-persist / --dry-report-only set — comparison was NOT written to SQLite)');
+  }
 }
 
 main().catch((err) => {

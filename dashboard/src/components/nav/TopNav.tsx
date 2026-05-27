@@ -8,6 +8,7 @@ const TABS = [
   { href: '/', label: 'Overview' },
   { href: '/observatory', label: 'Observatory' },
   { href: '/simulator', label: 'Paper Simulator' },
+  { href: '/compare', label: 'Compare Simulator' },
   { href: '/runs', label: 'Runs' },
 ];
 
